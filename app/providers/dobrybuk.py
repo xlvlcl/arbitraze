@@ -118,17 +118,6 @@ class DobryBukProvider:
             except Exception:
                 continue
         return False
-
-def _event_signature(ev):
-    # If a click fails and the source page stays on the same sport, the same
-    # table can otherwise be relabelled as every requested sport. Treat an
-    # identical event+market+quote matrix as one source event.
-    quotes=[]
-    for sel,items in sorted((ev.get('quotes') or {}).items()):
-        for q in sorted(items,key=lambda x:(str(x.get('bookmaker','')),float(x.get('odds',0)))):
-            quotes.append((str(sel).strip().lower(),str(q.get('bookmaker','')).strip().lower(),round(float(q.get('odds',0)),3)))
-    return (clean(ev.get('event','')).lower(), clean(ev.get('market','')).lower(), tuple(quotes))
-
     async def scan_all(self,sports):
         assert self.page
         all_events=[]; errors=[]
@@ -163,3 +152,14 @@ def _event_signature(ev):
             except Exception as e:
                 errors.append(f'{sport}: {e}')
         return all_events,errors
+
+def _event_signature(ev):
+    # If a click fails and the source page stays on the same sport, the same
+    # table can otherwise be relabelled as every requested sport. Treat an
+    # identical event+market+quote matrix as one source event.
+    quotes=[]
+    for sel,items in sorted((ev.get('quotes') or {}).items()):
+        for q in sorted(items,key=lambda x:(str(x.get('bookmaker','')),float(x.get('odds',0)))):
+            quotes.append((str(sel).strip().lower(),str(q.get('bookmaker','')).strip().lower(),round(float(q.get('odds',0)),3)))
+    return (clean(ev.get('event','')).lower(), clean(ev.get('market','')).lower(), tuple(quotes))
+
