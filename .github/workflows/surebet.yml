@@ -1,0 +1,96 @@
+name: Surebet Scanner
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: surebet-scanner
+  cancel-in-progress: true
+
+jobs:
+  scan-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      MIN_PROFIT_PCT: "0.35"
+      BANKROLL_PLN: "50"
+      SCAN_INTERVAL_SECONDS: "300"
+
+    steps:
+      - name: Pobierz kod
+        uses: actions/checkout@v6
+
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Zależności Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Cache przeglądarki Playwright
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Chromium dla Playwright
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: python -m playwright install chromium
+
+      - name: Przywróć pamięć alertów
+        uses: actions/cache/restore@v4
+        with:
+          path: data/github_state.json
+          key: surebet-state-${{ github.run_id }}
+          restore-keys: |
+            surebet-state-
+
+      - name: Sprawdź konfigurację Telegrama
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "UWAGA: Brakuje TELEGRAM_BOT_TOKEN lub TELEGRAM_CHAT_ID."
+            echo "Skanowanie będzie działać, ale Telegram nie będzie wysyłał alertów."
+          else
+            echo "Telegram: skonfigurowany"
+          fi
+
+      - name: Skanuj kursy i wyślij alerty
+        run: python scanner_github.py
+
+      - name: Zapamiętaj stan alertów
+        if: always() && hashFiles('data/github_state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: data/github_state.json
+          key: surebet-state-${{ github.run_id }}
+
+      - name: Przygotuj GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Zapakuj stronę
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs
+
+      - name: Opublikuj stronę
+        id: deployment
+        uses: actions/deploy-pages@v4
