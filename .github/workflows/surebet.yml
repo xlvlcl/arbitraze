@@ -1,11 +1,10 @@
 name: Surebet Scanner
 
 on:
-  # Run a little after the 5-minute marks to reduce the chance of GitHub delays
-  # around the start of each hour.
   schedule:
-    - cron: "2-57/5 * * * *"
-  # Run once automatically when this workflow file is changed.
+    # Every 5 minutes in Poland (Europe/Warsaw), offset from the top of the hour
+    - cron: "7/5 * * * *"
+      timezone: "Europe/Warsaw"
   push:
     paths:
       - ".github/workflows/surebet.yml"
@@ -74,10 +73,9 @@ jobs:
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
             echo "UWAGA: Brakuje TELEGRAM_BOT_TOKEN lub TELEGRAM_CHAT_ID."
-            echo "Skanowanie będzie działać, ale Telegram nie będzie wysyłał alertów."
-          else
-            echo "Telegram: skonfigurowany"
+            exit 1
           fi
+          echo "Telegram: skonfigurowany"
 
       - name: Skanuj kursy i wyślij alerty
         run: python scanner_github.py
@@ -117,4 +115,3 @@ jobs:
       - name: Opublikuj stronę
         id: deployment
         uses: actions/deploy-pages@v4
- 
