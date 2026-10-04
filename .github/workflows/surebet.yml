@@ -1,8 +1,14 @@
 name: Surebet Scanner
 
 on:
+  # Run a little after the 5-minute marks to reduce the chance of GitHub delays
+  # around the start of each hour.
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "2-57/5 * * * *"
+  # Run once automatically when this workflow file is changed.
+  push:
+    paths:
+      - ".github/workflows/surebet.yml"
   workflow_dispatch:
 
 permissions:
@@ -54,7 +60,7 @@ jobs:
 
       - name: Chromium dla Playwright
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: python -m playwright install chromium
+        run: python -m playwright install --with-deps chromium
 
       - name: Przywróć pamięć alertów
         uses: actions/cache/restore@v4
@@ -75,6 +81,23 @@ jobs:
 
       - name: Skanuj kursy i wyślij alerty
         run: python scanner_github.py
+
+      - name: Pokaż status skanu
+        if: always()
+        run: |
+          if [ -f docs/data/latest.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("docs/data/latest.json")
+          d = json.loads(p.read_text(encoding="utf-8"))
+          print(f"Ostatni skan: {d.get('last_scan')}")
+          print(f"Wydarzenia: {d.get('stats', {}).get('events', 0)}")
+          print(f"Kandydaci: {d.get('stats', {}).get('candidates', 0)}")
+          print(f"Surebety: {d.get('stats', {}).get('surebets', 0)}")
+          print(f"Błędy: {len(d.get('errors', []))}")
+          PY
+          fi
 
       - name: Zapamiętaj stan alertów
         if: always() && hashFiles('data/github_state.json') != ''
