@@ -1,20 +1,28 @@
 name: Surebet Scanner
 
 on:
-  # Run a little after the 5-minute marks to reduce the chance of GitHub delays
-  # around the start of each hour.
   schedule:
-    - cron: "2-57/5 * * * *"
-  # Run once automatically when this workflow file is changed.
-  push:
-    paths:
-      - ".github/workflows/surebet.yml"
+    # GitHub's shortest supported schedule interval is 5 minutes.
+    - cron: '*/5 * * * *'
+      timezone: 'Europe/Warsaw'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/surebet.yml'
+      - 'scanner_github.py'
+      - 'app/**'
+      - 'docs/**'
+      - 'requirements.txt'
 
 permissions:
   contents: read
   pages: write
   id-token: write
+
+env:
+  PYTHONUNBUFFERED: '1'
 
 concurrency:
   group: surebet-scanner
@@ -22,8 +30,9 @@ concurrency:
 
 jobs:
   scan-and-publish:
+    name: Scan and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 4
 
     environment:
       name: github-pages
@@ -32,88 +41,101 @@ jobs:
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      MIN_PROFIT_PCT: "0.35"
-      BANKROLL_PLN: "50"
-      SCAN_INTERVAL_SECONDS: "300"
+      MIN_PROFIT_PCT: '0.35'
+      BANKROLL_PLN: '50'
+      SCAN_INTERVAL_SECONDS: '300'
+      MAX_QUOTE_AGE_SECONDS: '180'
 
     steps:
-      - name: Pobierz kod
+      - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Python 3.13
+      - name: Setup Python 3.13
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: '3.13'
           cache: pip
 
-      - name: Zależności Python
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
-      - name: Cache przeglądarki Playwright
-        uses: actions/cache@v4
+      - name: Restore Playwright browser cache
         id: playwright-cache
+        uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
 
-      - name: Chromium dla Playwright
+      - name: Install Chromium
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install --with-deps chromium
 
-      - name: Przywróć pamięć alertów
+      - name: Restore alert memory
         uses: actions/cache/restore@v4
         with:
           path: data/github_state.json
-          key: surebet-state-${{ github.run_id }}
+          key: surebet-state-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
+            surebet-state-${{ github.ref_name }}-
             surebet-state-
 
-      - name: Sprawdź konfigurację Telegrama
+      - name: Check Telegram configuration
+        shell: bash
         run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "UWAGA: Brakuje TELEGRAM_BOT_TOKEN lub TELEGRAM_CHAT_ID."
-            echo "Skanowanie będzie działać, ale Telegram nie będzie wysyłał alertów."
+          set -euo pipefail
+          if [[ -z "${TELEGRAM_BOT_TOKEN}" || -z "${TELEGRAM_CHAT_ID}" ]]; then
+            echo '::warning::Brakuje TELEGRAM_BOT_TOKEN lub TELEGRAM_CHAT_ID. Alerty Telegram będą wyłączone.'
           else
-            echo "Telegram: skonfigurowany"
+            echo 'Telegram: skonfigurowany'
           fi
 
-      - name: Skanuj kursy i wyślij alerty
+      - name: Scan odds and send Telegram alerts
         run: python scanner_github.py
 
-      - name: Pokaż status skanu
+      - name: Show scan result
         if: always()
+        shell: bash
         run: |
-          if [ -f docs/data/latest.json ]; then
-            python - <<'PY'
+          python - <<'PY'
           import json
           from pathlib import Path
-          p = Path("docs/data/latest.json")
-          d = json.loads(p.read_text(encoding="utf-8"))
-          print(f"Ostatni skan: {d.get('last_scan')}")
-          print(f"Wydarzenia: {d.get('stats', {}).get('events', 0)}")
-          print(f"Kandydaci: {d.get('stats', {}).get('candidates', 0)}")
-          print(f"Surebety: {d.get('stats', {}).get('surebets', 0)}")
-          print(f"Błędy: {len(d.get('errors', []))}")
+          p = Path('docs/data/latest.json')
+          if not p.exists():
+              print('Brak docs/data/latest.json')
+              raise SystemExit(0)
+          try:
+              d = json.loads(p.read_text(encoding='utf-8'))
+              print(f"last_scan={d.get('last_scan', 0)}")
+              print(f"events={d.get('stats', {}).get('events', 0)}")
+              print(f"candidates={d.get('stats', {}).get('candidates', 0)}")
+              print(f"surebets={d.get('stats', {}).get('surebets', 0)}")
+              print(f"errors={len(d.get('errors', []))}")
+          except Exception as exc:
+              print(f'Nie udało się odczytać latest.json: {exc}')
           PY
-          fi
 
-      - name: Zapamiętaj stan alertów
+      - name: Save alert memory
         if: always() && hashFiles('data/github_state.json') != ''
         uses: actions/cache/save@v4
         with:
           path: data/github_state.json
-          key: surebet-state-${{ github.run_id }}
+          key: surebet-state-${{ github.ref_name }}-${{ github.run_id }}
 
-      - name: Przygotuj GitHub Pages
+      - name: Setup GitHub Pages
+        if: always()
         uses: actions/configure-pages@v5
 
-      - name: Zapakuj stronę
+      - name: Upload dashboard
+        if: always()
         uses: actions/upload-pages-artifact@v4
         with:
           path: docs
 
-      - name: Opublikuj stronę
+      - name: Deploy dashboard
+        if: always()
         id: deployment
         uses: actions/deploy-pages@v4
